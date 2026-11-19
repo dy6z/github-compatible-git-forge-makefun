@@ -462,6 +462,9 @@ export class Store {
   }
 
   public isAncestor(owner: string, repo: string, ancestorSha: string, commitSha: string): boolean {
+    if (ancestorSha === commitSha) return true;
+    const commit = this.getObject(commitSha);
+    if (commit?.type === 'commit' && parseCommit(commit.content).parents.includes(ancestorSha)) return true;
     const reachable = this.getCommitReachable(owner, repo, commitSha);
     return reachable.has(ancestorSha);
   }
