@@ -49,6 +49,10 @@ test('Store - Labels and Issues', () => {
   assert.strictEqual(updatedIssue.state, 'closed');
   assert.strictEqual(store.listIssues('owner1', 'repo1', 'open').length, 0);
   assert.strictEqual(store.listIssues('owner1', 'repo1', 'closed').length, 1);
+
+  const comment = store.createComment('owner1', 'repo1', issue.number, 'First comment');
+  assert.strictEqual(comment.body, 'First comment');
+  assert.deepStrictEqual(store.listComments('owner1', 'repo1', issue.number), [comment]);
 });
 
 test('Store - Contents and Git Objects', () => {
@@ -71,6 +75,15 @@ test('Store - Contents and Git Objects', () => {
   const updatedFile = store.getFileContent('owner1', 'repo2', 'README.md');
   assert.ok(updatedFile);
   assert.strictEqual(updatedFile.content.toString(), '# Hello World');
+
+  store.putFileContent('owner1', 'repo2', 'src/index.ts', Buffer.from('export {};'), 'Add source');
+  const directory = store.listDirectory('owner1', 'repo2', 'src');
+  assert.strictEqual(directory?.[0]?.path, 'src/index.ts');
+
+  const deleted = store.deleteFileContent('owner1', 'repo2', 'README.md', 'Delete README', 'main', updatedFile.sha);
+  assert.ok(deleted.commitSha);
+  assert.strictEqual(store.getFileContent('owner1', 'repo2', 'README.md'), undefined);
+  assert.throws(() => store.deleteFileContent('owner1', 'repo2', 'README.md', 'Delete again'));
 });
 
 test('Store - Pull Requests and Merging', () => {

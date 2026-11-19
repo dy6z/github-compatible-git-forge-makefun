@@ -44,6 +44,14 @@ export interface PullRequest {
   user: { login: string };
 }
 
+export interface Comment {
+  id: number;
+  body: string;
+  user: { login: string };
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TreeEntry {
   mode: string; // e.g. '100644', '040000'
   name: string;
@@ -155,6 +163,7 @@ export class Store {
   private labels = new Map<string, Map<string, Label>>();
   private issues = new Map<string, Map<number, Issue>>();
   private pulls = new Map<string, Map<number, PullRequest>>();
+  private comments = new Map<string, Map<number, Comment[]>>();
   private objects = new Map<string, { type: string; content: Buffer }>();
   private refs = new Map<string, Map<string, string>>();
   private issueCounters = new Map<string, number>();
@@ -162,6 +171,7 @@ export class Store {
   private repoIdCounter = 1000;
   private issueIdCounter = 10000;
   private prIdCounter = 20000;
+  private commentIdCounter = 30000;
   private logicalCounter = 0;
 
   public now(): string {
@@ -197,6 +207,7 @@ export class Store {
     this.labels.set(key, new Map());
     this.issues.set(key, new Map());
     this.pulls.set(key, new Map());
+    this.comments.set(key, new Map());
     this.refs.set(key, new Map());
     this.issueCounters.set(key, 0);
     this.prCounters.set(key, 0);
@@ -220,6 +231,7 @@ export class Store {
     this.labels.delete(key);
     this.issues.delete(key);
     this.pulls.delete(key);
+    this.comments.delete(key);
     this.refs.delete(key);
     this.issueCounters.delete(key);
     this.prCounters.delete(key);
@@ -303,6 +315,48 @@ export class Store {
       list = list.filter(i => i.state === state);
     }
     return list;
+  }
+
+  public createComment(owner: string, repo: string, issueNumber: number, body: string): Comment {
+    const key = `${owner}/${repo}`;
+    if (!this.getIssue(owner, repo, issueNumber) && !this.getPullRequest(owner, repo, issueNumber)) {
+      throw new Error(`Issue not found: #${issueNumber}`);
+    }
+    const byIssue = this.comments.get(key);
+    if (!byIssue) throw new Error(`Repository not found: ${key}`);
+    const timestamp = this.now();
+    const comment: Comment = {
+      id: this.commentIdCounter++,
+      body,
+      user: { login: owner },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const issueComments = byIssue.get(issueNumber) ?? [];
+    issueComments.push(comment);
+    byIssue.set(issueNumber, issueComments);
+    return comment;
+  }
+
+  public listComments(owner: string, repo: string, issueNumber: number): Comment[] {
+    return this.comments.get(`${owner}/${repo}`)?.get(issueNumber) ?? [];
+  }
+
+  public deleteRef(owner: string, repo: string, refName: string): boolean {
+    const repoRefs = this.refs.get(`${owner}/${repo}`);
+    if (!repoRefs) return false;
+    const fullRef = refName.startsWith('refs/') ? refName : `refs/heads/${refName}`;
+    return repoRefs.delete(fullRef);
+  }
+
+  public listRefs(owner: string, repo: string): Array<{ name: string; sha: string }> {
+    const repoRefs = this.refs.get(`${owner}/${repo}`);
+    if (!repoRefs) return [];
+    return Array.from(repoRefs, ([name, sha]) => ({ name, sha })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  public listObjects(): Array<{ sha: string; type: string; content: Buffer }> {
+    return Array.from(this.objects, ([sha, object]) => ({ sha, type: object.type, content: object.content }));
   }
 
   public createPullRequest(owner: string, repo: string, title: string, head: string, base: string, body: string = ''): PullRequest {
@@ -480,6 +534,58 @@ export class Store {
     if (!blobObj || blobObj.type !== 'blob') return undefined;
 
     return { content: blobObj.content, sha: entry.sha };
+  }
+
+  public deleteFileContent(
+    owner: string,
+    repo: string,
+    filePath: string,
+    message: string,
+    branchRef: string = 'refs/heads/main',
+    expectedSha?: string,
+  ): { commitSha: string } {
+    const fullRef = branchRef.startsWith('refs/') ? branchRef : `refs/heads/${branchRef}`;
+    const parentSha = this.getRef(owner, repo, fullRef);
+    if (!parentSha) throw new Error('File not found');
+    const parentObject = this.getObject(parentSha);
+    if (!parentObject || parentObject.type !== 'commit') throw new Error('File not found');
+    const parent = parseCommit(parentObject.content);
+    const flatFiles = this.flattenTree(owner, repo, parent.tree);
+    const existing = flatFiles.get(filePath);
+    if (!existing) throw new Error('File not found');
+    if (expectedSha && existing.sha !== expectedSha) throw new Error('Conflict: stale sha');
+    flatFiles.delete(filePath);
+    const tree = this.buildTreeFromFlat(flatFiles);
+    const identity = `${owner} <${owner}@forge.local>`;
+    const built = buildCommit({ tree, parents: [parentSha], author: identity, committer: identity, message });
+    this.storeObject('commit', built.content);
+    this.setRef(owner, repo, fullRef, built.sha);
+    return { commitSha: built.sha };
+  }
+
+  public listDirectory(owner: string, repo: string, directoryPath: string, branchRef: string = 'refs/heads/main'): Array<{ path: string; name: string; mode: string; sha: string; type: 'file' | 'dir' }> | undefined {
+    const fullRef = branchRef.startsWith('refs/') ? branchRef : `refs/heads/${branchRef}`;
+    const tipSha = this.getRef(owner, repo, fullRef);
+    if (!tipSha) return undefined;
+    const commitObject = this.getObject(tipSha);
+    if (!commitObject || commitObject.type !== 'commit') return undefined;
+    const flat = this.flattenTree(owner, repo, parseCommit(commitObject.content).tree);
+    const prefix = directoryPath.replace(/^\/+|\/+$/g, '');
+    const stem = prefix ? `${prefix}/` : '';
+    const children = new Map<string, { path: string; name: string; mode: string; sha: string; type: 'file' | 'dir' }>();
+    for (const [path, entry] of flat) {
+      if (!path.startsWith(stem)) continue;
+      const remainder = path.slice(stem.length);
+      if (!remainder) continue;
+      const slash = remainder.indexOf('/');
+      if (slash < 0) {
+        children.set(remainder, { path, name: remainder, mode: entry.mode, sha: entry.sha, type: 'file' });
+      } else {
+        const name = remainder.slice(0, slash);
+        if (!children.has(name)) children.set(name, { path: `${stem}${name}`, name, mode: '040000', sha: '', type: 'dir' });
+      }
+    }
+    return children.size ? Array.from(children.values()).sort((a, b) => a.name.localeCompare(b.name)) : undefined;
   }
 
   private buildTreeFromFlat(flatFiles: Map<string, { mode: string; sha: string }>): string {
