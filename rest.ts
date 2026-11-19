@@ -65,7 +65,9 @@ function repoJson(store: Store, repo: Repository): Record<string, unknown> {
 }
 
 function issueJson(store: Store, repo: Repository, issue: Issue): Record<string, unknown> {
-  return {
+  const cached = store.getCachedIssueJson(repo.owner, repo.name, issue.number);
+  if (cached !== undefined) return cached;
+  const value = {
     id: issue.id,
     node_id: `I_${issue.id}`,
     number: issue.number,
@@ -82,6 +84,8 @@ function issueJson(store: Store, repo: Repository, issue: Issue): Record<string,
     html_url: `http://forge/${repo.owner}/${repo.name}/issues/${issue.number}`,
     repository_url: `http://forge/api/v3/repos/${encodeSegment(repo.owner)}/${encodeSegment(repo.name)}`,
   };
+  store.setCachedIssueJson(repo.owner, repo.name, issue.number, value);
+  return value;
 }
 
 function pullJson(store: Store, repo: Repository, pull: PullRequest): Record<string, unknown> {

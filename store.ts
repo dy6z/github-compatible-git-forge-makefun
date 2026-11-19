@@ -167,6 +167,7 @@ export class Store {
   private objects = new Map<string, { type: string; content: Buffer }>();
   private refs = new Map<string, Map<string, string>>();
   private issueCounters = new Map<string, number>();
+  private issueJsonCache = new Map<string, Map<number, Record<string, unknown>>>();
   private prCounters = new Map<string, number>();
   private repoIdCounter = 1000;
   private issueIdCounter = 10000;
@@ -210,6 +211,7 @@ export class Store {
     this.comments.set(key, new Map());
     this.refs.set(key, new Map());
     this.issueCounters.set(key, 0);
+    this.issueJsonCache.set(key, new Map());
     this.prCounters.set(key, 0);
     return repo;
   }
@@ -234,6 +236,7 @@ export class Store {
     this.comments.delete(key);
     this.refs.delete(key);
     this.issueCounters.delete(key);
+    this.issueJsonCache.delete(key);
     this.prCounters.delete(key);
     return this.repos.delete(key);
   }
@@ -298,11 +301,24 @@ export class Store {
     return this.issues.get(key)?.get(number);
   }
 
+  public getCachedIssueJson(owner: string, repo: string, number: number): Record<string, unknown> | undefined {
+    return this.issueJsonCache.get(`${owner}/${repo}`)?.get(number);
+  }
+
+  public setCachedIssueJson(owner: string, repo: string, number: number, value: Record<string, unknown>): void {
+    this.issueJsonCache.get(`${owner}/${repo}`)?.set(number, value);
+  }
+
+  public invalidateIssueJson(owner: string, repo: string, number: number): void {
+    this.issueJsonCache.get(`${owner}/${repo}`)?.delete(number);
+  }
+
   public updateIssue(owner: string, repo: string, number: number, updates: Partial<Issue>): Issue {
     const key = `${owner}/${repo}`;
     const issue = this.getIssue(owner, repo, number);
     if (!issue) throw new Error(`Issue not found: #${number}`);
     Object.assign(issue, updates, { updatedAt: this.now() });
+    this.invalidateIssueJson(owner, repo, number);
     return issue;
   }
 
@@ -335,6 +351,7 @@ export class Store {
     const issueComments = byIssue.get(issueNumber) ?? [];
     issueComments.push(comment);
     byIssue.set(issueNumber, issueComments);
+    this.invalidateIssueJson(owner, repo, issueNumber);
     return comment;
   }
 
