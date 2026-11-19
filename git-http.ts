@@ -264,7 +264,7 @@ async function handleV2UploadPack(
     const respPackets: (string | 'flush')[] = [];
     const matchingRefs: Array<{ name: string; oid: string; peeled?: string; symrefTarget?: string }> = [];
 
-    if (symrefs || prefixes.length === 0 || prefixes.some(p => 'HEAD'.startsWith(p))) {
+    if (prefixes.length === 0 || prefixes.some(p => 'HEAD'.startsWith(p))) {
       const mainRef = repoRefs.find(r => r.name === 'refs/heads/main');
       if (mainRef) {
         matchingRefs.push({ name: 'HEAD', oid: mainRef.sha, symrefTarget: 'refs/heads/main' });
