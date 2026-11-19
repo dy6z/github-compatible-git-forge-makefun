@@ -47,6 +47,7 @@ export interface GitResponse {
 }
 
 const packCache = new Map<string, { pack: Buffer; sideband: Buffer }>();
+const cloneResponseCache = new Map<string, Buffer>();
 
 export async function handleGitRequest(
   store: Store,
@@ -387,6 +388,18 @@ async function handleV2UploadPack(
       packCache.set(cacheKey, cached);
     }
 
+    const responseKey = haves.length === 0 && shallowBoundaries.length === 0 && depth === 1 ? cacheKey : null;
+    if (responseKey !== null) {
+      const responseBody = cloneResponseCache.get(responseKey);
+      if (responseBody !== undefined) {
+        return {
+          status: 200,
+          headers: { 'content-type': 'application/x-git-upload-pack-result' },
+          body: responseBody,
+        };
+      }
+    }
+
     const respPackets: (string | 'flush' | 'delim')[] = [];
     respPackets.push('acknowledgments\n');
     for (const have of haves) {
@@ -410,6 +423,7 @@ async function handleV2UploadPack(
       cached.sideband,
       Buffer.from('0000', 'ascii'),
     ]);
+    if (responseKey !== null) cloneResponseCache.set(responseKey, finalBody);
 
     return {
       status: 200,
