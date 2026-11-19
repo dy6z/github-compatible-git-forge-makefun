@@ -342,6 +342,10 @@ export class Store {
     return this.comments.get(`${owner}/${repo}`)?.get(issueNumber) ?? [];
   }
 
+  public commentCount(owner: string, repo: string, issueNumber: number): number {
+    return this.comments.get(`${owner}/${repo}`)?.get(issueNumber)?.length ?? 0;
+  }
+
   public deleteRef(owner: string, repo: string, refName: string): boolean {
     const repoRefs = this.refs.get(`${owner}/${repo}`);
     if (!repoRefs) return false;

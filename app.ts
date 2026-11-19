@@ -1,5 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { Store } from './store.ts';
+import { handleRest } from './rest.ts';
+import { executeGraphQL } from './graphql.ts';
+import { handleMcpSurface } from './mcp.ts';
+import { handleGitRequest } from './git-http.ts';
 
 export interface SurfaceResponse {
   status: number;
@@ -84,10 +88,8 @@ export function createApp(): Server {
 
       let result: SurfaceResponse | null = null;
       if (url.pathname === '/mcp') {
-        const { handleMcpSurface } = await import('./mcp.ts');
         result = await handleMcpSurface(store, common);
       } else if (url.pathname === '/api/graphql') {
-        const { executeGraphQL } = await import('./graphql.ts');
         let parsed: unknown;
         try {
           parsed = JSON.parse(body.toString('utf8'));
@@ -99,7 +101,6 @@ export function createApp(): Server {
           result = { status: executed.status, body: executed.body };
         }
       } else if (url.pathname === '/api/v3' || url.pathname.startsWith('/api/v3/')) {
-        const { handleRest } = await import('./rest.ts');
         let parsed: unknown = undefined;
         if (body.length > 0) {
           try {
@@ -127,7 +128,6 @@ export function createApp(): Server {
           result = { status: answer.status, headers: answerHeaders, body: answer.body };
         }
       } else if (url.pathname.includes('.git/')) {
-        const { handleGitRequest } = await import('./git-http.ts');
         const headers = Object.fromEntries(
           Object.entries(request.headers).flatMap(([name, value]) => typeof value === 'string' ? [[name, value]] : []),
         );

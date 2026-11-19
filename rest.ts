@@ -65,7 +65,6 @@ function repoJson(store: Store, repo: Repository): Record<string, unknown> {
 }
 
 function issueJson(store: Store, repo: Repository, issue: Issue): Record<string, unknown> {
-  const comments = store.listComments(repo.owner, repo.name, issue.number);
   return {
     id: issue.id,
     node_id: `I_${issue.id}`,
@@ -74,12 +73,8 @@ function issueJson(store: Store, repo: Repository, issue: Issue): Record<string,
     body: issue.body,
     state: issue.state,
     user: { login: issue.user.login, id: 1001, type: 'User' },
-    labels: issue.labels.map((l) => {
-      const lbls = store.listLabels(repo.owner, repo.name);
-      const found = lbls.find((x) => x.name.toLowerCase() === l.toLowerCase());
-      return { name: l, color: found?.color ?? 'ededed' };
-    }),
-    comments: comments.length,
+    labels: issue.labels.map((name) => ({ name, color: 'ededed' })),
+    comments: store.commentCount(repo.owner, repo.name, issue.number),
     created_at: issue.createdAt,
     updated_at: issue.updatedAt,
     closed_at: issue.state === 'closed' ? issue.updatedAt : null,
