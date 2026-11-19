@@ -258,7 +258,7 @@ async function handleV2UploadPack(
       if (arg === 'peel') peel = true;
       else if (arg === 'symrefs') symrefs = true;
       else if (arg === 'unborn') unborn = true;
-      else if (arg.startsWith('ref-prefix ')) prefixes.push(arg.slice(11));
+      else if (arg.startsWith('ref-prefix ')) prefixes.push(arg.slice('ref-prefix '.length));
     }
 
     const respPackets: (string | 'flush')[] = [];
@@ -307,11 +307,13 @@ async function handleV2UploadPack(
   if (command === 'fetch') {
     const wants: string[] = [];
     const haves: string[] = [];
+    const shallowBoundaries: string[] = [];
     let depth: number | undefined;
 
     for (const arg of args) {
       if (arg.startsWith('want ')) wants.push(arg.slice(5).trim());
       else if (arg.startsWith('have ')) haves.push(arg.slice(5).trim());
+      else if (arg.startsWith('shallow ')) shallowBoundaries.push(arg.slice(8).trim());
       else if (arg.startsWith('deepen ')) depth = Number.parseInt(arg.slice(7), 10);
     }
 
@@ -320,20 +322,59 @@ async function handleV2UploadPack(
       return obj ? { type: obj.type as any, data: obj.content } : undefined;
     };
 
-    const serverTips = repoRefs.map(r => r.sha);
-    const serverReachable = collectReachable(serverTips, lookup, { allowMissing: true });
     const wantReachable = collectReachable(wants, lookup);
-    const clientReachable = collectReachable(haves, lookup, { allowMissing: true });
+    const clientReachable = new Set<string>();
+    const clientQueue = [...haves];
+    const clientShallow = new Set(shallowBoundaries);
+    while (clientQueue.length > 0) {
+      const oid = clientQueue.pop()!;
+      if (clientReachable.has(oid)) continue;
+      const object = store.getObject(oid);
+      if (!object) continue;
+      clientReachable.add(oid);
+      if (object.type === 'commit') {
+        const commit = parseCommit(object.content);
+        for (const child of collectReachable([commit.tree], lookup)) clientReachable.add(child);
+        if (!clientShallow.has(oid)) clientQueue.push(...commit.parents);
+      } else if (object.type === 'tree' || object.type === 'tag') {
+        for (const child of collectReachable([oid], lookup)) clientReachable.add(child);
+      }
+    }
+    let allowed = wantReachable;
+    let shallowLines: string[] = [];
+    if (depth !== undefined && depth > 0) {
+      allowed = new Set<string>();
+      const commits: Array<{ oid: string; level: number }> = wants.map((oid) => ({ oid, level: 1 }));
+      const seenCommits = new Set<string>();
+      while (commits.length > 0) {
+        const current = commits.pop()!;
+        if (seenCommits.has(current.oid)) continue;
+        seenCommits.add(current.oid);
+        const object = store.getObject(current.oid);
+        if (!object || object.type !== 'commit') continue;
+        allowed.add(current.oid);
+        const commit = parseCommit(object.content);
+        for (const oid of collectReachable([commit.tree], lookup)) allowed.add(oid);
+        if (current.level >= depth) {
+          shallowLines.push(`shallow ${current.oid}\n`);
+        } else {
+          for (const parent of commit.parents) commits.push({ oid: parent, level: current.level + 1 });
+        }
+      }
+      for (const previous of shallowBoundaries) {
+        if (seenCommits.has(previous) && !shallowLines.some((line) => line.includes(previous))) shallowLines.push(`unshallow ${previous}\n`);
+      }
+    }
 
     const sendObjects: any[] = [];
-    for (const oid of wantReachable) {
+    for (const oid of allowed) {
       if (!clientReachable.has(oid)) {
         const obj = store.getObject(oid);
         if (obj) sendObjects.push({ type: obj.type, data: obj.content });
       }
     }
 
-    const cacheKey = `${owner}/${repo}:${wants.join(',')}:${depth || 0}`;
+    const cacheKey = `${owner}/${repo}:${wants.join(',')}:${haves.join(',')}:${shallowBoundaries.join(',')}:${depth || 0}`;
     let packBuf = packCache.get(cacheKey);
     if (!packBuf) {
       packBuf = writePack(sendObjects);
@@ -343,16 +384,22 @@ async function handleV2UploadPack(
     const respPackets: (string | 'flush' | 'delim')[] = [];
     respPackets.push('acknowledgments\n');
     for (const have of haves) {
-      if (serverReachable.has(have)) {
+      if (store.getObject(have)) {
         respPackets.push(`ACK ${have}\n`);
       }
     }
     respPackets.push('NAK\n');
     respPackets.push('flush');
 
+    if (shallowLines.length > 0) {
+      respPackets.push('shallow-info\n');
+      respPackets.push(...shallowLines);
+      respPackets.push('flush');
+    }
+
     respPackets.push('packfile\n');
 
-    const chunkBytes = 65519;
+    const chunkBytes = 65515;
     const sidebandChunks: Buffer[] = [];
     sidebandChunks.push(encodeSideband(2, Buffer.from('Counting objects: 100% done\r\n', 'utf8')));
 
@@ -402,14 +449,11 @@ function handleV0UploadPack(
     }
   }
 
-  const repoRefs = store.listRefs(owner, repo);
   const lookup = (oid: string) => {
     const obj = store.getObject(oid);
     return obj ? { type: obj.type as any, data: obj.content } : undefined;
   };
 
-  const serverTips = repoRefs.map(r => r.sha);
-  const serverReachable = collectReachable(serverTips, lookup, { allowMissing: true });
   const wantReachable = collectReachable(wants, lookup);
 
   const sendObjects: any[] = [];
@@ -426,7 +470,7 @@ function handleV0UploadPack(
   const sidebandChunks: Buffer[] = [];
   sidebandChunks.push(encodeSideband(2, Buffer.from('Counting objects: done\n', 'utf8')));
 
-  const chunkBytes = 65519;
+  const chunkBytes = 65515;
   for (let offset = 0; offset < packBuf.length; offset += chunkBytes) {
     const chunk = packBuf.subarray(offset, Math.min(offset + chunkBytes, packBuf.length));
     sidebandChunks.push(encodeSideband(1, chunk));

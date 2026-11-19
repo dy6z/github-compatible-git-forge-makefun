@@ -628,6 +628,33 @@ export class Store {
     return sha;
   }
 
+  public pullRequestConflicts(owner: string, repo: string, number: number): boolean {
+    const pr = this.getPullRequest(owner, repo, number);
+    if (!pr) throw new Error(`Pull request not found: #${number}`);
+    const baseSha = this.getRef(owner, repo, pr.baseRefName);
+    const headSha = this.getRef(owner, repo, pr.headRefName);
+    if (!baseSha || !headSha) return true;
+    const baseObject = this.getObject(baseSha);
+    const headObject = this.getObject(headSha);
+    if (!baseObject || baseObject.type !== 'commit' || !headObject || headObject.type !== 'commit') return true;
+    const head = parseCommit(headObject.content);
+    const mergeBaseSha = head.parents[0];
+    if (!mergeBaseSha || mergeBaseSha === baseSha) return false;
+    const mergeBaseObject = this.getObject(mergeBaseSha);
+    if (!mergeBaseObject || mergeBaseObject.type !== 'commit') return true;
+    const baseFiles = this.flattenTree(owner, repo, parseCommit(baseObject.content).tree);
+    const headFiles = this.flattenTree(owner, repo, head.tree);
+    const commonFiles = this.flattenTree(owner, repo, parseCommit(mergeBaseObject.content).tree);
+    const paths = new Set([...baseFiles.keys(), ...headFiles.keys(), ...commonFiles.keys()]);
+    for (const path of paths) {
+      const common = commonFiles.get(path)?.sha;
+      const base = baseFiles.get(path)?.sha;
+      const branch = headFiles.get(path)?.sha;
+      if (base !== common && branch !== common && base !== branch) return true;
+    }
+    return false;
+  }
+
   public mergePullRequest(owner: string, repo: string, number: number): { sha: string; merged: boolean; message: string } {
     const pr = this.getPullRequest(owner, repo, number);
     if (!pr) throw new Error(`Pull request not found: #${number}`);

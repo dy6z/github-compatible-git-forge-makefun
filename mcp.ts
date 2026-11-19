@@ -153,12 +153,13 @@ async function processRpc(reqObj: any, store: Store): Promise<any> {
             inputSchema: {
               type: 'object',
               properties: {
+                owner: { type: 'string', description: 'Repository owner login' },
                 name: { type: 'string', description: 'Repository name' },
                 description: { type: 'string', description: 'Repository description' },
                 private: { type: 'boolean', description: 'Private repository' },
                 isPrivate: { type: 'boolean' }
               },
-              required: ['name'],
+              required: ['owner', 'name'],
             },
           },
           {
@@ -323,7 +324,16 @@ function executeTool(name: string, args: Record<string, any>, store: Store): any
     if (!repoName) throw new Error('Missing required argument: name');
     const description = args.description || '';
     const isPrivate = args.private ?? args.is_private ?? false;
-    return store.createRepo(owner, repoName, description, isPrivate);
+    const created = store.createRepo(owner, repoName, description, isPrivate);
+    return {
+      id: created.databaseId,
+      name: created.name,
+      full_name: `${created.owner}/${created.name}`,
+      owner: { login: created.owner },
+      private: created.isPrivate,
+      description: created.description,
+      default_branch: created.defaultBranch,
+    };
   }
 
   if (normalized.endsWith('getrepo') || normalized === 'getrepo') {

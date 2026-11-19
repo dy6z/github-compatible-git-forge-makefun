@@ -16,6 +16,7 @@ export interface SurfaceRequest {
 }
 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
+let responseSequence = 0;
 
 async function readRequestBody(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -40,6 +41,7 @@ function requestOwner(request: IncomingMessage): string | null {
 
 function writeResponse(response: ServerResponse, result: SurfaceResponse): void {
   response.statusCode = result.status;
+  response.setHeader('x-github-request-id', `forge-${(++responseSequence).toString(36)}`);
   for (const [name, value] of Object.entries(result.headers ?? {})) response.setHeader(name, value);
   if (result.body === undefined || result.status === 204) {
     response.end();
@@ -118,7 +120,11 @@ export function createApp(): Server {
             authenticated: true,
             requestId: 'forge',
           });
-          result = { status: answer.status, headers: answer.headers, body: answer.body };
+          const answerHeaders = { ...(answer.headers ?? {}) };
+          if (answerHeaders.link && request.headers.host) {
+            answerHeaders.link = answerHeaders.link.replaceAll('http://forge', `http://${request.headers.host}`);
+          }
+          result = { status: answer.status, headers: answerHeaders, body: answer.body };
         }
       } else if (url.pathname.includes('.git/')) {
         const { handleGitRequest } = await import('./git-http.ts');

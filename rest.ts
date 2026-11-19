@@ -98,7 +98,7 @@ function pullJson(store: Store, repo: Repository, pull: PullRequest): Record<str
     number: pull.number,
     title: pull.title,
     body: pull.body,
-    state: pull.state,
+    state: pull.merged ? 'closed' : pull.state,
     merged: pull.merged,
     merged_at: pull.merged ? pull.updatedAt : null,
     user: { login: pull.user.login, id: 1001, type: 'User' },
@@ -107,7 +107,7 @@ function pullJson(store: Store, repo: Repository, pull: PullRequest): Record<str
     base: { ref: pull.baseRefName, sha: baseSha, label: `${repo.owner}:${pull.baseRefName}` },
     created_at: pull.createdAt,
     updated_at: pull.updatedAt,
-    closed_at: pull.state === 'closed' ? pull.updatedAt : null,
+    closed_at: pull.state === 'closed' || pull.merged ? pull.updatedAt : null,
     url: `http://forge/api/v3/repos/${encodeSegment(repo.owner)}/${encodeSegment(repo.name)}/pulls/${pull.number}`,
     html_url: `http://forge/${repo.owner}/${repo.name}/pull/${pull.number}`,
     merge_commit_sha: pull.mergeCommitSha ?? null,
@@ -510,6 +510,7 @@ export function handleRest(ctx: RestContext): RestAnswer {
       }
       if (rest[2] === 'merge' && method === 'PUT') {
         try {
+          if (store.pullRequestConflicts(owner, name, prNum)) return message(405, 'Pull request is not mergeable');
           const res = store.mergePullRequest(owner, name, prNum);
           return json(200, res);
         } catch (err: any) {

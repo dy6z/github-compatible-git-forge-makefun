@@ -632,6 +632,7 @@ async function executeSingleOperation(
         const owner = decoded.owner as string;
         const name = decoded.name as string;
         const number = decoded.number as number;
+        if (store.pullRequestConflicts(owner, name, number)) throw new Error('Pull request is not mergeable');
         store.mergePullRequest(owner, name, number);
         const prObj = {
           number,
