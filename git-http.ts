@@ -46,7 +46,7 @@ export interface GitResponse {
   body: Buffer;
 }
 
-const packCache = new Map<string, Buffer>();
+const packCache = new Map<string, { pack: Buffer; sideband: Buffer }>();
 
 export async function handleGitRequest(
   store: Store,
@@ -375,10 +375,16 @@ async function handleV2UploadPack(
     }
 
     const cacheKey = `${owner}/${repo}:${wants.join(',')}:${haves.join(',')}:${shallowBoundaries.join(',')}:${depth || 0}`;
-    let packBuf = packCache.get(cacheKey);
-    if (!packBuf) {
-      packBuf = writePack(sendObjects);
-      packCache.set(cacheKey, packBuf);
+    let cached = packCache.get(cacheKey);
+    if (!cached) {
+      const pack = writePack(sendObjects);
+      const chunkBytes = 65515;
+      const sidebandChunks: Buffer[] = [encodeSideband(2, Buffer.from('Counting objects: 100% done\r\n', 'utf8'))];
+      for (let offset = 0; offset < pack.length; offset += chunkBytes) {
+        sidebandChunks.push(encodeSideband(1, pack.subarray(offset, Math.min(offset + chunkBytes, pack.length))));
+      }
+      cached = { pack, sideband: Buffer.concat(sidebandChunks) };
+      packCache.set(cacheKey, cached);
     }
 
     const respPackets: (string | 'flush' | 'delim')[] = [];
@@ -399,18 +405,9 @@ async function handleV2UploadPack(
 
     respPackets.push('packfile\n');
 
-    const chunkBytes = 65515;
-    const sidebandChunks: Buffer[] = [];
-    sidebandChunks.push(encodeSideband(2, Buffer.from('Counting objects: 100% done\r\n', 'utf8')));
-
-    for (let offset = 0; offset < packBuf.length; offset += chunkBytes) {
-      const chunk = packBuf.subarray(offset, Math.min(offset + chunkBytes, packBuf.length));
-      sidebandChunks.push(encodeSideband(1, chunk));
-    }
-
     const finalBody = Buffer.concat([
       encodePktLines(respPackets),
-      Buffer.concat(sidebandChunks),
+      cached.sideband,
       Buffer.from('0000', 'ascii'),
     ]);
 
