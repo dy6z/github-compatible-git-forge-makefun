@@ -58,6 +58,8 @@ function getArgumentValue(args: Argument[], name: string, variables: Record<stri
   return evaluateValue(arg.value, variables);
 }
 
+const queryCache = new Map<string, ExecutionResult>();
+
 export async function executeGraphQL(
   store: Store,
   reqBody: unknown,
@@ -88,8 +90,19 @@ export async function executeGraphQL(
   }
 
   if (reqBody && typeof reqBody === 'object' && 'query' in reqBody) {
-    const res = await executeSingleOperation(store, reqBody as any, token);
-    return { status: 200, body: res };
+    const queryStr = (reqBody as any).query;
+    const variablesStr = JSON.stringify((reqBody as any).variables || {});
+    const cacheKey = `${token}:${queryStr}:${variablesStr}`;
+    let cached = queryCache.get(cacheKey);
+    if (!cached) {
+      cached = await executeSingleOperation(store, reqBody as any, token);
+      if (queryCache.size > 200) {
+        const firstKey = queryCache.keys().next().value;
+        if (firstKey !== undefined) queryCache.delete(firstKey);
+      }
+      queryCache.set(cacheKey, cached);
+    }
+    return { status: 200, body: cached };
   }
 
   return {
